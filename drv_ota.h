@@ -1,5 +1,5 @@
 /* *****************************************************************************
- * File:   template.h
+ * File:   drv_ota.h
  * Author: XX
  *
  * Created on YYYY MM DD
