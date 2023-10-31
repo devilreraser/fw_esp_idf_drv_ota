@@ -1,10 +1,10 @@
 /* *****************************************************************************
  * File:   drv_ota.c
- * Author: XX
+ * Author: DL
  *
- * Created on YYYY MM DD
+ * Created on 2023 11 01
  * 
- * Description: ...
+ * Description: esp-idf driver for ota
  * 
  **************************************************************************** */
 
