@@ -1,3 +1,24 @@
 menu "Component drv_ota Configuration"
 
+    config DRV_OTA_USE
+        bool "Use drv_ota Component"
+        default y
+        help
+            Selct use or not Firmware update functionality.
+
+    config DRV_OTA_FIRMWARE_UPG_URL
+        string "Firmware Upgrade URL"
+        depends on DRV_OTA_USE
+        default "http://www.ivetell.com:8080/firmware/endpoint.bin"
+        help
+            URL of server which hosts the firmware image.
+
+    config DRV_OTA_RECV_TIMEOUT
+        int "OTA Receive Timeout"
+        depends on DRV_OTA_USE
+        default 5000
+        help
+            Maximum time for reception
+        
+
 endmenu
