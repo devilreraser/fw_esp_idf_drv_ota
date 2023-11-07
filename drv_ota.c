@@ -26,6 +26,7 @@
 #include "esp_http_client.h"
 #include "esp_flash_partitions.h"
 #include "esp_partition.h"
+#include "esp_app_format.h"
 
 /* *****************************************************************************
  * Configuration Definitions
