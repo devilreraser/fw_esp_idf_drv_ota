@@ -47,6 +47,7 @@ extern "C"
 /* *****************************************************************************
  * Function Prototypes
  **************************************************************************** */
+void drv_ota_print_info(void);
 void drv_ota_init(void);
 void drv_ota_create_task(const char *url);
 
