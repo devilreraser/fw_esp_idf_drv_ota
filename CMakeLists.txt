@@ -1,4 +1,4 @@
-idf_component_register(SRCS "cmd_ota.c" "drv_ota.c" 
+idf_component_register(SRCS "drv_ota.c" "cmd_ota.c" 
                     INCLUDE_DIRS "." 
                     REQUIRES 
                         "console" 

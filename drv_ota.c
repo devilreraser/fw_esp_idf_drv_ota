@@ -71,6 +71,80 @@ static char ota_write_data[WRITE_DATA_BUFFSIZE + 1] = { 0 };
 /* *****************************************************************************
  * Functions
  **************************************************************************** */
+
+static void print_sha256(const uint8_t *image_hash, const char *label)
+{
+    static char hash_print[HASH_LEN * 2 + 1];
+    hash_print[HASH_LEN * 2] = 0;
+    for (int i = 0; i < HASH_LEN; ++i) {
+        sprintf(&hash_print[i * 2], "%02x", image_hash[i]);
+    }
+    ESP_LOGI(TAG, "%s %s", label, hash_print);
+}
+
+static void get_sha256_of_partitions(void)
+{
+    uint8_t sha_256[HASH_LEN] = { 0 };
+    esp_partition_t partition;
+
+    // get sha256 digest for bootloader
+    partition.address   = ESP_BOOTLOADER_OFFSET;
+    partition.size      = ESP_PARTITION_TABLE_OFFSET;
+    partition.type      = ESP_PARTITION_TYPE_APP;
+    esp_partition_get_sha256(&partition, sha_256);
+    print_sha256(sha_256, "SHA-256 for bootloader: ");
+    esp_partition_get_sha256(esp_ota_get_running_partition(), sha_256);
+    print_sha256(sha_256, "SHA-256 for current firmware: ");
+}
+
+void print_esp_app_desc(const esp_app_desc_t *desc) 
+{
+    if (desc == NULL) 
+    {
+        printf("Null pointer provided\n");
+        return;
+    }
+
+    printf("Magic Word: 0x%08X\n", (unsigned int)desc->magic_word);
+    printf("Secure Version: %u\n", (unsigned int)desc->secure_version);
+    printf("reserv1[0]: 0x%08X\n", (unsigned int)desc->reserv1[0]);
+    printf("reserv1[1]: 0x%08X\n", (unsigned int)desc->reserv1[1]);
+
+    printf("Version: %s\n", desc->version);
+    printf("Project Name: %s\n", desc->project_name);
+    printf("Compile Time: %s\n", desc->time);
+    printf("Compile Date: %s\n", desc->date);
+    printf("IDF Version: %s\n", desc->idf_ver);
+
+    for (int i = 0; i < 32; i++) {
+        printf("reserv2[%d]: 0x%08X\n", i, (unsigned int)desc->reserv2[i]);
+    }
+
+    printf("App ELF SHA256: ");
+    for (int i = 0; i < 32; i++) {
+        printf("%02X", desc->app_elf_sha256[i]);
+    }
+    printf("\n");
+}
+
+
+
+
+void drv_ota_print_info(void)
+{
+    get_sha256_of_partitions(); 
+
+    //Print app description
+    #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    #else
+    const esp_app_desc_t *app_desc = esp_ota_get_app_description();
+    #endif
+    print_esp_app_desc(app_desc);
+}
+
+
+
 void drv_ota_init(void)
 {
     cmd_ota_register();
