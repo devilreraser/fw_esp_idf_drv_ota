@@ -6,6 +6,13 @@ menu "Component drv_ota Configuration"
         help
             Selct use or not Firmware update functionality.
 
+    config DRV_OTA_MAX_START_STOP_PROCESSES
+        int "Count Stoppable processes"
+        depends on DRV_OTA_USE
+        default 10
+        help
+            Count processes that can be registered to be stopped during firmware update.
+
     config DRV_OTA_FIRMWARE_UPG_URL
         string "Firmware Upgrade URL"
         depends on DRV_OTA_USE

@@ -35,6 +35,7 @@ extern "C"
 /* *****************************************************************************
  * Type Definitions
  **************************************************************************** */
+typedef void (*drv_ota_start_stop_process_func_t)(void);
 
 /* *****************************************************************************
  * Function-Like Macro
@@ -50,6 +51,12 @@ extern "C"
 void drv_ota_print_info(void);
 void drv_ota_init(void);
 void drv_ota_create_task(const char *url);
+void drv_ota_start_processes(void);
+void drv_ota_stop_processes(void);
+void drv_ota_register_start_stop_process(
+                drv_ota_start_stop_process_func_t start_func, 
+                drv_ota_start_stop_process_func_t stop_func, 
+                char* process_name);
 
 #ifdef __cplusplus
 }

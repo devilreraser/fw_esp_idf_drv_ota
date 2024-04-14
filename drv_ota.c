@@ -35,6 +35,10 @@
  **************************************************************************** */
 #define TAG "drv_ota"
 
+#define USE_HTTP_CLIENT_DIRECTLY    0
+
+#define MAX_START_STOP_PROCESSES    CONFIG_DRV_OTA_MAX_START_STOP_PROCESSES
+
 /* *****************************************************************************
  * Constants and Macros Definitions
  **************************************************************************** */
@@ -51,6 +55,13 @@
 /* *****************************************************************************
  * Type Definitions
  **************************************************************************** */
+typedef struct drv_ota_start_stop_process_t
+{
+    drv_ota_start_stop_process_func_t start_func;
+    drv_ota_start_stop_process_func_t stop_func;
+    char name[16];
+}drv_ota_start_stop_process_t;
+
 
 /* *****************************************************************************
  * Function-Like Macros
@@ -64,10 +75,22 @@ extern const uint8_t server_cert_pem_end[] asm("_binary_ota_ca_cert_pem_end");
 
 TaskHandle_t xHandleOTA = NULL;
 char cURLOTA[OTA_URL_SIZE] = CONFIG_DRV_OTA_FIRMWARE_UPG_URL;
-//static char ota_write_data[WRITE_DATA_BUFFSIZE + 1] = { 0 };
 
+
+#if USE_HTTP_CLIENT_DIRECTLY
+static char ota_write_data[WRITE_DATA_BUFFSIZE + 1] = { 0 };
+#endif
+
+
+#if USE_HTTP_CLIENT_DIRECTLY == 0
 int new_image_recv = 0;
 int new_image_size = 0;
+#endif
+
+
+drv_ota_start_stop_process_t drv_ota_start_stop_process_list[MAX_START_STOP_PROCESSES] = {0};
+int drv_ota_start_stop_process_count = 0;
+
 
 /* *****************************************************************************
  * Prototype of functions definitions
@@ -157,17 +180,19 @@ void drv_ota_init(void)
 }
 
 
-
-// static void http_cleanup(esp_http_client_handle_t client)
-// {
-//     esp_http_client_close(client);
-//     esp_http_client_cleanup(client);
-// }
+#if USE_HTTP_CLIENT_DIRECTLY
+static void http_cleanup(esp_http_client_handle_t client)
+{
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+}
+#endif
 
 //static void __attribute__((noreturn)) task_fatal_error(void)
 static void task_fatal_error(void)
 {
     ESP_LOGE(TAG, "Exiting task due to fatal error...");
+    drv_ota_start_processes();
     xHandleOTA = NULL;
     (void)vTaskDelete(NULL);
     //while (1) {;}
@@ -224,15 +249,22 @@ void parse_version(const char* version_str, int *major, int *minor, int *build)
 static void ota_task(void *pvParameter)
 {
     esp_err_t err;
-    /* update handle : set by esp_ota_begin(), must be freed via esp_ota_end() */
-    //esp_ota_handle_t update_handle = 0 ;
     const esp_partition_t *update_partition = NULL;
 
-    ESP_LOGI(TAG, "Starting OTA");
 
+
+
+    #if USE_HTTP_CLIENT_DIRECTLY
+    /* update handle : set by esp_ota_begin(), must be freed via esp_ota_end() */
+    esp_ota_handle_t update_handle = 0 ;
+    #endif
+
+
+
+
+    ESP_LOGI(TAG, "Starting OTA");
     const esp_partition_t *configured = esp_ota_get_boot_partition();
     const esp_partition_t *running = esp_ota_get_running_partition();
-
     ESP_LOGI(TAG, "Booting partition type %d subtype %d (offset 0x%08x)",
              configured->type, configured->subtype, (unsigned int)configured->address);
     ESP_LOGI(TAG, "Running partition type %d subtype %d (offset 0x%08x)",
@@ -243,7 +275,6 @@ static void ota_task(void *pvParameter)
                  (unsigned int)configured->address, (unsigned int)running->address);
         ESP_LOGW(TAG, "(This can happen if either the OTA boot data or preferred boot image become corrupted somehow.)");
     }
-
     esp_http_client_config_t config = 
     {
         .url = (char*)pvParameter,
@@ -258,13 +289,17 @@ static void ota_task(void *pvParameter)
     config.skip_cert_common_name_check = true;
     #endif
 
+
+
+
+
+
+    #if USE_HTTP_CLIENT_DIRECTLY == 0
     esp_https_ota_config_t ota_config = {
         .http_config = &config,
     };
-
     new_image_recv = 0;
     new_image_size = 0;
-
     esp_https_ota_handle_t https_ota_handle = NULL;
     err = esp_https_ota_begin(&ota_config, &https_ota_handle);
     if (https_ota_handle == NULL) 
@@ -273,44 +308,53 @@ static void ota_task(void *pvParameter)
         task_fatal_error();
         return;
     }
+    #endif
 
 
 
-    // esp_http_client_handle_t client = esp_http_client_init(&config);
-    // if (client == NULL) 
-    // {
-    //     ESP_LOGE(TAG, "Failed to initialise HTTP connection");
-    //     task_fatal_error();
-    //     return;
-    // }
-    // err = esp_http_client_open(client, 0);
-    // if (err != ESP_OK) 
-    // {
-    //     ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
-    //     esp_http_client_cleanup(client);
-    //     task_fatal_error();
-    //     return;
-    // }
 
-    // esp_http_client_fetch_headers(client);
+    #if USE_HTTP_CLIENT_DIRECTLY
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) 
+    {
+        ESP_LOGE(TAG, "Failed to initialise HTTP connection");
+        task_fatal_error();
+        return;
+    }
+    err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) 
+    {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        task_fatal_error();
+        return;
+    }
+    esp_http_client_fetch_headers(client);
+    #endif
+
+
+
 
     update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL)
     {
         ESP_LOGE(TAG, "Failed to get update partition");
-        // esp_http_client_cleanup(client);
+        #if USE_HTTP_CLIENT_DIRECTLY
+        esp_http_client_cleanup(client);
+        #endif
         task_fatal_error();
         return;
-
     }
     //assert(update_partition != NULL);
 
     ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%x",
              update_partition->subtype, (unsigned int)update_partition->address);
 
+
+
+
+    #if USE_HTTP_CLIENT_DIRECTLY == 0
     int app_major = 0, app_minor = 0, app_build = 0;
-
-
     #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5,0,0)
     const esp_app_desc_t *app_desc = esp_app_get_description();
     #else
@@ -321,10 +365,7 @@ static void ota_task(void *pvParameter)
         ESP_LOGI(TAG, "Parse APP_VERSION");
         parse_version(app_desc->version, &app_major, &app_minor, &app_build);
     }
-    
-
     int new_major = 0, new_minor = 0, new_build = 0;
-
     esp_app_desc_t new_app_info;
     if (esp_https_ota_get_img_desc(https_ota_handle, &new_app_info) == ESP_OK) 
     {
@@ -338,195 +379,204 @@ static void ota_task(void *pvParameter)
     {
         ESP_LOGE(TAG, "Failed to get new app description");
     }
-
     if ((app_minor != 0) && (app_minor != 255) && (app_minor != new_minor))
     {
         esp_https_ota_abort(https_ota_handle);
         task_fatal_error();
         return;
     }
-
     uint64_t time_last = esp_timer_get_time();
     uint32_t time_passed = 0;
+    #endif
 
-    //int binary_file_length = 0;
-    ///*deal with all receive packet*/
-    //bool image_header_was_checked = false;
+    #if USE_HTTP_CLIENT_DIRECTLY
+    int binary_file_length = 0;
+    /*deal with all receive packet*/
+    bool image_header_was_checked = false;
+    #endif
+
     while (1) 
     {
-        err = esp_https_ota_perform(https_ota_handle);
 
+
+
+        #if USE_HTTP_CLIENT_DIRECTLY == 0
+        err = esp_https_ota_perform(https_ota_handle);
         int new_image_recv = esp_https_ota_get_image_len_read(https_ota_handle);
         int new_image_size = esp_https_ota_get_image_size(https_ota_handle);
-
         uint64_t time_now = esp_timer_get_time();
-
         uint32_t time_diff = time_now - time_last;
-
         time_last = time_now;
-
         time_passed += time_diff;
-
         if (time_passed >= 1000 * 1000)
         {
             time_passed -= 1000 * 1000;
             ESP_LOGI(TAG, "Firmware image download process %7d/%7d bytes (%6.2f%%)", new_image_recv, new_image_size, (float)new_image_recv / new_image_size * 100);
         }
-        
-
         if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) 
         {
             break;
         }
+        #endif
 
 
-        // int data_read = esp_http_client_read(client, ota_write_data, WRITE_DATA_BUFFSIZE);
-        // if (data_read < 0) 
-        // {
-        //     ESP_LOGE(TAG, "Error: SSL data read error");
-        //     http_cleanup(client);
-        //     task_fatal_error();
-        //     return;
-        // } 
-        // else if (data_read > 0) 
-        // {
-        //     if (image_header_was_checked == false) 
-        //     {
-        //         esp_app_desc_t new_app_info;
-        //         if (data_read > sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t)) 
-        //         {
-        //             // check current version with downloading
-        //             memcpy(&new_app_info, &ota_write_data[sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t)], sizeof(esp_app_desc_t));
-        //             ESP_LOGI(TAG, "New firmware version: %s", new_app_info.version);
 
-        //             esp_app_desc_t running_app_info;
-        //             if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) 
-        //             {
-        //                 ESP_LOGI(TAG, "Running firmware version: %s", running_app_info.version);
-        //             }
 
-        //             const esp_partition_t* last_invalid_app = esp_ota_get_last_invalid_partition();
-        //             esp_app_desc_t invalid_app_info;
-        //             if (esp_ota_get_partition_description(last_invalid_app, &invalid_app_info) == ESP_OK) 
-        //             {
-        //                 ESP_LOGI(TAG, "Last invalid firmware version: %s", invalid_app_info.version);
-        //             }
 
-        //             // check current version with last invalid partition
-        //             if (last_invalid_app != NULL) 
-        //             {
-        //                 if (memcmp(invalid_app_info.version, new_app_info.version, sizeof(new_app_info.version)) == 0) 
-        //                 {
-        //                     ESP_LOGW(TAG, "New version is the same as invalid version.");
-        //                     ESP_LOGW(TAG, "Previously, there was an attempt to launch the firmware with %s version, but it failed.", invalid_app_info.version);
-        //                     ESP_LOGW(TAG, "The firmware has been rolled back to the previous version.");
-        //                     http_cleanup(client);
-        //                     //infinite_loop();
-        //                     task_fatal_error();
-        //                     return;
+        #if USE_HTTP_CLIENT_DIRECTLY
+        int data_read = esp_http_client_read(client, ota_write_data, WRITE_DATA_BUFFSIZE);
+        if (data_read < 0) 
+        {
+            ESP_LOGE(TAG, "Error: SSL data read error");
+            http_cleanup(client);
+            task_fatal_error();
+            return;
+        } 
+        else if (data_read > 0) 
+        {
+            if (image_header_was_checked == false) 
+            {
+                esp_app_desc_t new_app_info;
+                if (data_read > sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t)) 
+                {
+                    // check current version with downloading
+                    memcpy(&new_app_info, &ota_write_data[sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t)], sizeof(esp_app_desc_t));
+                    ESP_LOGI(TAG, "New firmware version: %s", new_app_info.version);
 
-        //                 }
-        //             }
-        //             #ifndef CONFIG_EXAMPLE_SKIP_VERSION_CHECK
-        //             if (memcmp(new_app_info.version, running_app_info.version, sizeof(new_app_info.version)) == 0) 
-        //             {
-        //                 ESP_LOGW(TAG, "Current running version is the same as a new. We will not continue the update.");
-        //                 http_cleanup(client);
-        //                 //infinite_loop();
-        //                 task_fatal_error();
-        //                 return;
-        //             }
-        //             #endif
+                    esp_app_desc_t running_app_info;
+                    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) 
+                    {
+                        ESP_LOGI(TAG, "Running firmware version: %s", running_app_info.version);
+                    }
 
-        //             image_header_was_checked = true;
+                    const esp_partition_t* last_invalid_app = esp_ota_get_last_invalid_partition();
+                    esp_app_desc_t invalid_app_info;
+                    if (esp_ota_get_partition_description(last_invalid_app, &invalid_app_info) == ESP_OK) 
+                    {
+                        ESP_LOGI(TAG, "Last invalid firmware version: %s", invalid_app_info.version);
+                    }
 
-        //             err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
-        //             if (err != ESP_OK)
-        //             {
-        //                 ESP_LOGE(TAG, "esp_ota_begin failed (%s)", esp_err_to_name(err));
-        //                 http_cleanup(client);
-        //                 esp_ota_abort(update_handle);
-        //                 task_fatal_error();
-        //                 return;
-        //             }
-        //             ESP_LOGI(TAG, "esp_ota_begin succeeded");
-        //         } 
-        //         else 
-        //         {
-        //             ESP_LOGE(TAG, "received package is not fit len");
-        //             http_cleanup(client);
-        //             esp_ota_abort(update_handle);
-        //             task_fatal_error();
-        //             return;
-        //         }
-        //     }
-        //     err = esp_ota_write( update_handle, (const void *)ota_write_data, data_read);
-        //     if (err != ESP_OK) 
-        //     {
-        //         http_cleanup(client);
-        //         esp_ota_abort(update_handle);
-        //         task_fatal_error();
-        //         return;
-        //     }
-        //     binary_file_length += data_read;
-        //     ESP_LOGD(TAG, "Written image length %d", binary_file_length);
-        // } 
-        // else if (data_read == 0) 
-        // {
-        //    /*
-        //     * As esp_http_client_read never returns negative error code, we rely on
-        //     * `errno` to check for underlying transport connectivity closure if any
-        //     */
-        //     if (errno == ECONNRESET || errno == ENOTCONN) 
-        //     {
-        //         ESP_LOGE(TAG, "Connection closed, errno = %d", errno);
-        //         break;
-        //     }
-        //     if (esp_http_client_is_complete_data_received(client) == true) 
-        //     {
-        //         ESP_LOGI(TAG, "Connection closed");
-        //         break;
-        //     }
-        // }
+                    // check current version with last invalid partition
+                    if (last_invalid_app != NULL) 
+                    {
+                        if (memcmp(invalid_app_info.version, new_app_info.version, sizeof(new_app_info.version)) == 0) 
+                        {
+                            ESP_LOGW(TAG, "New version is the same as invalid version.");
+                            ESP_LOGW(TAG, "Previously, there was an attempt to launch the firmware with %s version, but it failed.", invalid_app_info.version);
+                            ESP_LOGW(TAG, "The firmware has been rolled back to the previous version.");
+                            http_cleanup(client);
+                            //infinite_loop();
+                            task_fatal_error();
+                            return;
+
+                        }
+                    }
+                    #ifndef CONFIG_EXAMPLE_SKIP_VERSION_CHECK
+                    if (memcmp(new_app_info.version, running_app_info.version, sizeof(new_app_info.version)) == 0) 
+                    {
+                        ESP_LOGW(TAG, "Current running version is the same as a new. We will not continue the update.");
+                        http_cleanup(client);
+                        //infinite_loop();
+                        task_fatal_error();
+                        return;
+                    }
+                    #endif
+
+                    image_header_was_checked = true;
+
+                    err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "esp_ota_begin failed (%s)", esp_err_to_name(err));
+                        http_cleanup(client);
+                        esp_ota_abort(update_handle);
+                        task_fatal_error();
+                        return;
+                    }
+                    ESP_LOGI(TAG, "esp_ota_begin succeeded");
+                } 
+                else 
+                {
+                    ESP_LOGE(TAG, "received package is not fit len");
+                    http_cleanup(client);
+                    esp_ota_abort(update_handle);
+                    task_fatal_error();
+                    return;
+                }
+            }
+            err = esp_ota_write( update_handle, (const void *)ota_write_data, data_read);
+            if (err != ESP_OK) 
+            {
+                http_cleanup(client);
+                esp_ota_abort(update_handle);
+                task_fatal_error();
+                return;
+            }
+            binary_file_length += data_read;
+            ESP_LOGD(TAG, "Written image length %d", binary_file_length);
+        } 
+        else if (data_read == 0) 
+        {
+           /*
+            * As esp_http_client_read never returns negative error code, we rely on
+            * `errno` to check for underlying transport connectivity closure if any
+            */
+            if (errno == ECONNRESET || errno == ENOTCONN) 
+            {
+                ESP_LOGE(TAG, "Connection closed, errno = %d", errno);
+                break;
+            }
+            if (esp_http_client_is_complete_data_received(client) == true) 
+            {
+                ESP_LOGI(TAG, "Connection closed");
+                break;
+            }
+        }
+        #endif
+
+
     }
 
-    // ESP_LOGI(TAG, "Total Write binary data length: %d", binary_file_length);
-    // if (esp_http_client_is_complete_data_received(client) != true) 
-    // {
-    //     ESP_LOGE(TAG, "Error in receiving complete file");
-    //     http_cleanup(client);
-    //     esp_ota_abort(update_handle);
-    //     task_fatal_error();
-    //     return;
-    // }
-
-    // err = esp_ota_end(update_handle);
-
-    // if (err != ESP_OK) 
-    // {
-    //     if (err == ESP_ERR_OTA_VALIDATE_FAILED) 
-    //     {
-    //         ESP_LOGE(TAG, "Image validation failed, image is corrupted");
-    //     } 
-    //     else 
-    //     {
-    //         ESP_LOGE(TAG, "esp_ota_end failed (%s)!", esp_err_to_name(err));
-    //     }
-    //     http_cleanup(client);
-    //     task_fatal_error();
-    //     return;
-    // }
 
 
-    // err = esp_ota_set_boot_partition(update_partition);
-    // if (err != ESP_OK) 
-    // {
-    //     ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)!", esp_err_to_name(err));
-    //     http_cleanup(client);
-    //     task_fatal_error();
-    //     return;
-    // }
+    #if USE_HTTP_CLIENT_DIRECTLY
+    ESP_LOGI(TAG, "Total Write binary data length: %d", binary_file_length);
+    if (esp_http_client_is_complete_data_received(client) != true) 
+    {
+        ESP_LOGE(TAG, "Error in receiving complete file");
+        http_cleanup(client);
+        esp_ota_abort(update_handle);
+        task_fatal_error();
+        return;
+    }
+    err = esp_ota_end(update_handle);
+    if (err != ESP_OK) 
+    {
+        if (err == ESP_ERR_OTA_VALIDATE_FAILED) 
+        {
+            ESP_LOGE(TAG, "Image validation failed, image is corrupted");
+        } 
+        else 
+        {
+            ESP_LOGE(TAG, "esp_ota_end failed (%s)!", esp_err_to_name(err));
+        }
+        http_cleanup(client);
+        task_fatal_error();
+        return;
+    }
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) 
+    {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)!", esp_err_to_name(err));
+        http_cleanup(client);
+        task_fatal_error();
+        return;
+    }
+    #endif
 
+
+
+    #if USE_HTTP_CLIENT_DIRECTLY == 0
     if (err != ESP_OK) 
     {
         esp_https_ota_abort(https_ota_handle);
@@ -542,10 +592,11 @@ static void ota_task(void *pvParameter)
         task_fatal_error();
         return;
     }
+    #endif
 
     ESP_LOGI(TAG, "Prepare to restart system!");
     esp_restart();
-    
+    drv_ota_start_processes();
     xHandleOTA = NULL;
     vTaskDelete(NULL);
 
@@ -566,7 +617,10 @@ void drv_ota_create_task(const char *url)
 
     if (xHandleOTA == NULL)
     {
+        drv_ota_stop_processes();
+
         ESP_LOGI(TAG, "Creating OTA Task...");
+
         xTaskCreate(&ota_task, "ota_task", 8192, (void *)upgradeURL, configMAX_PRIORITIES - 0, &xHandleOTA);
         ESP_LOGI(TAG, "Created OTA Task...");
         configASSERT(xHandleOTA);
@@ -577,3 +631,81 @@ void drv_ota_create_task(const char *url)
     }
 }
 
+void drv_ota_start_processes(void)
+{
+    for (int index = drv_ota_start_stop_process_count-1; index >= 0; index--)
+    {
+        if (drv_ota_start_stop_process_list[index].start_func)
+        {
+            ESP_LOGI(TAG, "Executing start process %s", drv_ota_start_stop_process_list[index].name);
+            drv_ota_start_stop_process_list[index].start_func();
+        }
+        else
+        {
+            if (strlen(drv_ota_start_stop_process_list[index].name) > 0)
+            {
+                ESP_LOGI(TAG, "Executing start process %s skipped", drv_ota_start_stop_process_list[index].name);
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Executing start process %s (empty string) skipped", drv_ota_start_stop_process_list[index].name);
+            }
+        }
+    }
+}
+void drv_ota_stop_processes(void)
+{
+    for (int index = 0; index < drv_ota_start_stop_process_count; index++)
+    {
+        if (drv_ota_start_stop_process_list[index].stop_func)
+        {
+            ESP_LOGI(TAG, "Executing stop process %s", drv_ota_start_stop_process_list[index].name);
+            drv_ota_start_stop_process_list[index].stop_func();
+        }
+        else
+        {
+            if (strlen(drv_ota_start_stop_process_list[index].name) > 0)
+            {
+                ESP_LOGI(TAG, "Executing stop process %s skipped", drv_ota_start_stop_process_list[index].name);
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Executing stop process %s (empty string) skipped", drv_ota_start_stop_process_list[index].name);
+            }
+        }
+    }
+}
+
+
+void drv_ota_register_start_stop_process(drv_ota_start_stop_process_func_t start_func, drv_ota_start_stop_process_func_t stop_func, char* process_name)
+{
+    if (drv_ota_start_stop_process_count < MAX_START_STOP_PROCESSES)
+    {
+        drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].start_func = start_func;
+        drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].stop_func = stop_func;
+        if (process_name)
+        {
+            if (strlen(process_name) < sizeof(drv_ota_start_stop_process_list[0].name))
+            {
+                strcpy(drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].name, process_name);
+                ESP_LOGI(TAG, "Register process %s", drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].name);
+            }
+            else
+            {
+                memcpy(drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].name, process_name, sizeof(drv_ota_start_stop_process_list[0].name));
+                drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].name[sizeof(drv_ota_start_stop_process_list[0].name) - 1] = '\0';
+                ESP_LOGW(TAG, "Register process %s name truncated to %s", process_name, drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].name);
+            }
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Register process %s (empty string)", drv_ota_start_stop_process_list[drv_ota_start_stop_process_count].name);
+        }
+        drv_ota_start_stop_process_count++;
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Cannot register %s process start stop (no space left)", process_name);
+    }
+    
+}
