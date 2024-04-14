@@ -4,6 +4,7 @@ idf_component_register(SRCS "drv_ota.c" "cmd_ota.c"
                         "console" 
                         "app_update" 
                         "esp_http_client" 
+                        "esp_https_ota"
                         "bootloader_support"
                     EMBED_TXTFILES ota_ca_cert.pem
                                       )

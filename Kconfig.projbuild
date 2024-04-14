@@ -13,10 +13,16 @@ menu "Component drv_ota Configuration"
         help
             URL of server which hosts the firmware image.
 
+    config DRV_OTA_CERTIFICATE_SKIP_CN_CHECK
+        bool "Server skip certificate Common Name field check"
+        default n
+        help
+          This allows you to skip the validation of OTA server certificate CN field
+
     config DRV_OTA_RECV_TIMEOUT
         int "OTA Receive Timeout"
         depends on DRV_OTA_USE
-        default 5000
+        default 0
         help
             Maximum time for reception
         
